@@ -176,7 +176,7 @@ func identityFromFile(path string, p Prompter) ([]age.Identity, error) {
 func Rekey(o RekeyOptions, p Prompter) (RekeyResult, error) {
 	from := o.From
 	if from == "" {
-		from = os.Getenv("PERRY_IDENTITY")
+		from = os.Getenv(EnvIdentity)
 	}
 	if from == "" {
 		from = defaultSSHKey()
@@ -191,7 +191,7 @@ func Rekey(o RekeyOptions, p Prompter) (RekeyResult, error) {
 	if _, err := os.Stat(StorePath()); err != nil {
 		return RekeyResult{}, errors.New("no store to rekey")
 	}
-	if os.Getenv("PERRY_RECIPIENTS") != "" {
+	if os.Getenv(EnvRecipients) != "" {
 		return RekeyResult{}, errors.New("unset PERRY_RECIPIENTS: rekey writes the recipients file in the config dir")
 	}
 	unlock, err := lock(true)

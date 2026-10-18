@@ -65,17 +65,23 @@ func newPathChecker() *pathChecker {
 	tokens := re(preB + `\.tokens` + postB)
 	add(labelToken, func(t string) (string, bool) { return plain(tokens)(jqRe.ReplaceAllString(t, "${1}FILTER")) })
 
+	var names []string
+	for _, n := range vault.ConfigFiles() {
+		names = append(names, regexp.QuoteMeta(n))
+	}
 	for _, r := range []*regexp.Regexp{
 		re(preB + `\.config/perry` + postB),
 		re(preB + `\$\{?XDG_CONFIG_HOME\}?/perry` + postB),
-		re(preB + `perry/(?:store\.age|store\.lock|recipients|identity\.age)(?:\.bak)?(?:$|[^A-Za-z0-9_.\-])`),
-		re(`(?:^|[^A-Za-z0-9_.\-])` + regexp.QuoteMeta(c.cfgDir) + postB),
+		re(preB + `perry/(?:` + strings.Join(names, "|") + `)(?:\.bak)?(?:$|[^A-Za-z0-9_.\-])`),
 	} {
 		add(labelStore, plain(r))
 	}
-
-	if id := os.Getenv("PERRY_IDENTITY"); id != "" {
-		add(labelSSHKey, plain(re(regexp.QuoteMeta(id)+postB)))
+	for i, p := range vault.ProtectedPaths() {
+		label := labelStore
+		if i > 0 {
+			label = labelSSHKey
+		}
+		add(label, plain(re(`(?:^|[^A-Za-z0-9_.\-])`+regexp.QuoteMeta(p)+postB)))
 	}
 	sshFile := re(preB + hp + `/\.ssh/([^\s"'` + "`" + `;|&)<>*?/\\\[\]{}]+)`)
 	add(labelSSHKey, func(t string) (string, bool) {

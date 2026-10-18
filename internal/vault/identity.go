@@ -52,7 +52,7 @@ func ClassifyIdentity(raw []byte) (IdentityKind, error) {
 // IdentityPath picks PERRY_IDENTITY, then identity.age when it exists, then the
 // default ed25519 SSH key.
 func IdentityPath() string {
-	if p := os.Getenv("PERRY_IDENTITY"); p != "" {
+	if p := os.Getenv(EnvIdentity); p != "" {
 		return p
 	}
 	if _, err := os.Stat(DefaultIdentityPath()); err == nil {
@@ -143,7 +143,7 @@ func Unwrap(raw []byte, kind IdentityKind, pass string) (string, error) {
 // recipientsFile is PERRY_RECIPIENTS, then <configdir>/recipients when it
 // exists. Empty means fall back to the default SSH public key.
 func recipientsFile() string {
-	if p := os.Getenv("PERRY_RECIPIENTS"); p != "" {
+	if p := os.Getenv(EnvRecipients); p != "" {
 		return p
 	}
 	if _, err := os.Stat(recipientsPath()); err == nil {

@@ -13,3 +13,5 @@
 **Leak check**: a test of whether text holds any stored secret, in any form perry redacts. It gives one verdict: clean, leaked, locked, or unverifiable. It never says which entry matched.
 
 **Deny reply**: the one JSON line that the hook writes to stop a tool call. It has a reason, and the same closing sentence on every deny. Unreadable hook input also gets a deny reply.
+
+**Protected path**: a path that holds or points to secret material, such as the config dir or the file named by `PERRY_IDENTITY`. The vault lists them, and the guard denies tool calls that touch them.

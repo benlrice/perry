@@ -15,9 +15,6 @@ import (
 	"github.com/benlrice/perry/internal/vault"
 )
 
-// EnvPrefix marks variables that configure perry. The child never sees them.
-const EnvPrefix = "PERRY_"
-
 // EnvSpec sets one child variable from a stored field.
 type EnvSpec struct{ Name, Ref string }
 
@@ -137,7 +134,7 @@ func (p *Plan) Run(s Streams) (int, error) {
 func childEnv() []string {
 	var env []string
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, EnvPrefix) {
+		if !strings.HasPrefix(kv, vault.EnvPrefix) {
 			env = append(env, kv)
 		}
 	}

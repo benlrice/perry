@@ -217,3 +217,37 @@ func TestPerryIdentityPathBlocked(t *testing.T) {
 	t.Setenv("PERRY_IDENTITY", home+"/keys/mine.pem")
 	expectDeny(t, bash(t, "cat "+home+"/keys/mine.pem"), "SSH private key")
 }
+
+// Every path the vault can produce must be denied. A new config file or
+// path-valued variable in vault fails here until guard covers it.
+func TestEveryVaultPathIsDenied(t *testing.T) {
+	home := env(t)
+	t.Setenv(vault.EnvIdentity, home+"/keys/mine.pem")
+	paths := vault.ProtectedPaths()
+	for _, name := range vault.ConfigFiles() {
+		paths = append(paths, filepath.Join(vault.ConfigDir(), name), filepath.Join(vault.ConfigDir(), name+".bak"))
+	}
+	paths = append(paths, vault.StorePath(), vault.DefaultIdentityPath())
+	for _, p := range paths {
+		for _, d := range []Decision{
+			Decide(input(t, "Read", map[string]any{"file_path": p})),
+			bash(t, "cat "+p),
+		} {
+			if !d.Deny {
+				t.Errorf("not denied: %s", p)
+			}
+		}
+	}
+}
+
+func TestShellSpellingsOfConfigDirMatchVault(t *testing.T) {
+	home := env(t)
+	if vault.ConfigDir() != filepath.Join(home, ".config", "perry") {
+		t.Fatalf("config dir moved: %s", vault.ConfigDir())
+	}
+	for _, p := range []string{"~/.config/perry/store.age", "$HOME/.config/perry/store.age", "${XDG_CONFIG_HOME}/perry/store.age", "$XDG_CONFIG_HOME/perry"} {
+		if !bash(t, "cat "+p).Deny {
+			t.Errorf("not denied: %s", p)
+		}
+	}
+}
