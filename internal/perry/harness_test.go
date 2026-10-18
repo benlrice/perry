@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -514,4 +515,33 @@ func TestImport(t *testing.T) {
 	// rerun: everything that was imported now exists
 	out, _, _ = s.run("\n\n", "import", file)
 	expect(t, "exists", out, "exists, skipped: Grafana prod (grafana.example.com:3000, grafana)")
+}
+
+func TestStoreUnlockedWhileChildRuns(t *testing.T) {
+	s := newSandbox(t)
+	s.add(tok+"\n", "--host", "api.example.com", "--kind", "api", "--user", "alice")
+	started := filepath.Join(t.TempDir(), "started")
+	child := exec.Command(binPath, "run", "--", "sh", "-c", "touch "+started+"; sleep 5")
+	child.Env = s.env
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { child.Process.Kill(); child.Wait() }()
+	for i := 0; i < 100; i++ {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	done := make(chan struct{})
+	go func() {
+		s.mustRun(tok+"\n", "add", "--host", "b.example.com", "--kind", "api", "--user", "")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("add blocked while a run child was alive")
+	}
 }

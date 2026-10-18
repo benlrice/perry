@@ -1,4 +1,4 @@
-package perry
+package inject
 
 import (
 	"path/filepath"
