@@ -14,7 +14,7 @@ import (
 	"github.com/benlrice/perry/docs"
 	"github.com/benlrice/perry/internal/claudecfg"
 	"github.com/benlrice/perry/internal/guard"
-	"github.com/benlrice/perry/internal/redact"
+	"github.com/benlrice/perry/internal/leak"
 	"github.com/benlrice/perry/internal/vault"
 )
 
@@ -26,20 +26,11 @@ func cmdScan(args []string) error {
 	if err != nil {
 		return &exitError{2, err.Error()}
 	}
-	found := false
-	err = vault.View(func(d *vault.Data) error {
-		for _, e := range d.Entries {
-			if redact.Contains(string(text), e.Secret, e.Username) {
-				found = true
-				return nil
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return &exitError{2, err.Error()}
-	}
-	if found {
+	res := leak.Check(string(text))
+	switch res.Verdict {
+	case leak.Locked, leak.Unverifiable:
+		return &exitError{2, res.Err.Error()}
+	case leak.Leaked:
 		return &exitError{1, "stored secret detected"}
 	}
 	return nil

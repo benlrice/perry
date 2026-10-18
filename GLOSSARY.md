@@ -9,3 +9,5 @@
 **Plan**: a command with all refs resolved. It holds the argv, the child environment, and a scrubber. It does not need the store to run.
 
 **Scrubber**: the redactor that replaces every form of a stored secret in the child output with a `«perry:LABEL»` mark.
+
+**Leak check**: a test of whether text holds any stored secret, in any form perry redacts. It gives one verdict: clean, leaked, locked, or unverifiable. It never says which entry matched.

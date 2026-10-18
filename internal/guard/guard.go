@@ -3,11 +3,9 @@ package guard
 
 import (
 	"encoding/json"
-	"errors"
 	"regexp"
 
-	"github.com/benlrice/perry/internal/redact"
-	"github.com/benlrice/perry/internal/vault"
+	"github.com/benlrice/perry/internal/leak"
 )
 
 // Input is the part of the hook payload that the guard reads.
@@ -66,27 +64,14 @@ func Decide(in Input) Decision {
 		return Decision{}
 	}
 
-	var hit bool
-	err := vault.View(func(d *vault.Data) error {
-		for _, e := range d.Entries {
-			for _, t := range all {
-				if redact.Contains(t, e.Secret, e.Username) {
-					hit = true
-					return nil
-				}
-			}
-		}
-		return nil
-	})
-	switch {
-	case errors.Is(err, vault.ErrLocked):
+	switch leak.Check(all...).Verdict {
+	case leak.Locked:
 		return Decision{Locked: true}
-	case err != nil:
+	case leak.Unverifiable:
 		if bash {
 			return deny("blocked: cannot verify command against the secret store.")
 		}
-		return Decision{}
-	case hit:
+	case leak.Leaked:
 		return deny("blocked: tool input contains a stored secret.")
 	}
 	return Decision{}
