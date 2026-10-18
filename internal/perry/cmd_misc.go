@@ -2,7 +2,6 @@ package perry
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -14,6 +13,7 @@ import (
 	"github.com/benlrice/perry/docs"
 	"github.com/benlrice/perry/internal/claudecfg"
 	"github.com/benlrice/perry/internal/guard"
+	"github.com/benlrice/perry/internal/hook"
 	"github.com/benlrice/perry/internal/leak"
 	"github.com/benlrice/perry/internal/vault"
 )
@@ -36,24 +36,6 @@ func cmdScan(args []string) error {
 	return nil
 }
 
-type hookPayload struct {
-	CWD       string          `json:"cwd"`
-	ToolName  string          `json:"tool_name"`
-	ToolInput json.RawMessage `json:"tool_input"`
-}
-
-func writeDeny(reason string) {
-	type out struct {
-		EventName string `json:"hookEventName"`
-		Decision  string `json:"permissionDecision"`
-		Reason    string `json:"permissionDecisionReason"`
-	}
-	msg := "perry: " + reason + " Use `perry run -- <cmd> {{perry:<host>}}` to inject secrets instead."
-	enc := json.NewEncoder(stdout)
-	enc.SetEscapeHTML(false)
-	enc.Encode(map[string]out{"hookSpecificOutput": {"PreToolUse", "deny", msg}})
-}
-
 func cmdHook(args []string) error {
 	pathsOnly := false
 	for _, a := range args {
@@ -63,20 +45,16 @@ func cmdHook(args []string) error {
 		pathsOnly = true
 	}
 	nonInteractive = true
-	raw, err := io.ReadAll(stdin)
-	var p hookPayload
-	if err != nil || json.Unmarshal(raw, &p) != nil || len(p.ToolInput) == 0 {
-		writeDeny("blocked: unreadable hook input.")
-		return nil
-	}
-	d := guard.Decide(guard.Input{CWD: p.CWD, ToolName: p.ToolName, ToolInput: p.ToolInput, PathsOnly: pathsOnly})
-	if d.Locked {
-		fmt.Fprintln(stderr, "perry hook: store locked; paths-only checks applied")
-	}
-	if d.Deny {
-		writeDeny(d.Reason)
-	}
-	return nil
+	return hook.Serve(stdin, stdout, func(p hook.Payload) string {
+		d := guard.Decide(guard.Input{CWD: p.CWD, ToolName: p.ToolName, ToolInput: p.ToolInput, PathsOnly: pathsOnly})
+		if d.Locked {
+			fmt.Fprintln(stderr, "perry hook: store locked; paths-only checks applied")
+		}
+		if d.Deny {
+			return d.Reason
+		}
+		return ""
+	})
 }
 
 func cmdInstall(args []string) error {

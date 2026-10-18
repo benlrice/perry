@@ -11,3 +11,5 @@
 **Scrubber**: the redactor that replaces every form of a stored secret in the child output with a `«perry:LABEL»` mark.
 
 **Leak check**: a test of whether text holds any stored secret, in any form perry redacts. It gives one verdict: clean, leaked, locked, or unverifiable. It never says which entry matched.
+
+**Deny reply**: the one JSON line that the hook writes to stop a tool call. It has a reason, and the same closing sentence on every deny. Unreadable hook input also gets a deny reply.

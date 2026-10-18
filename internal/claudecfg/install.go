@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/benlrice/perry/internal/hook"
 )
 
 const (
@@ -121,7 +123,7 @@ func verify(exe, probe string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("verify: hook probe failed to run: %w", err)
 	}
-	if !strings.Contains(out.String(), `"permissionDecision":"deny"`) {
+	if !hook.IsDeny(out.Bytes()) {
 		return errors.New("verify: hook did not deny the credential-file probe")
 	}
 	return nil
