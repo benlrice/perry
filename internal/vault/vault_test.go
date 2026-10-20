@@ -179,9 +179,11 @@ func wrapScrypt(t *testing.T, plain, pass string) []byte {
 func TestLockedFlow_KeygenRekeyUnlock(t *testing.T) {
 	sshHome(t)
 	t.Cleanup(func() { CacheDrop() })
-	if _, _, _, err := CacheGet(); err != nil {
+	// CacheGet succeeds on an empty keyring even where adding a key is denied (CI runners).
+	if _, err := CachePut("probe", time.Minute); err != nil {
 		t.Skipf("keyring unavailable: %v", err)
 	}
+	CacheDrop()
 	add(t, Entry{Host: "h", Kind: "k", Secret: "longsecretvalue", Created: "t", Updated: "t"})
 
 	rcpt, err := Keygen("", fixedPass("pw"))
