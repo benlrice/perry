@@ -135,9 +135,10 @@ out. Use the wider matcher shown above.
 
 ### Short secrets
 
-A secret shorter than 6 characters matches only as a whole word in `hook` and
-`scan`. Perry does not remove such a secret from output unless the command
-references it. `perry add` shows a warning for short secrets.
+A secret shorter than 6 characters has no encoded forms. It matches only as a
+whole word in `hook` and `scan`, and perry removes it from output only as a
+whole word. This holds whether or not the command references it. `perry add`
+shows a warning for short secrets.
 
 ### Locked store
 
