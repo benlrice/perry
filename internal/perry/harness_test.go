@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benlrice/perry/internal/vault"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -405,6 +406,10 @@ func TestScan(t *testing.T) {
 }
 
 func TestLockedFlow(t *testing.T) {
+	if _, err := vault.CachePut("probe", time.Minute); err != nil {
+		t.Skipf("keyring unavailable: %v", err)
+	}
+	vault.CacheDrop()
 	s := newSandbox(t)
 	s.add(tok+"\n", "--host", "api.example.com", "--kind", "api", "--user", "")
 	s = s.with("PERRY_PASSPHRASE=correct horse")
