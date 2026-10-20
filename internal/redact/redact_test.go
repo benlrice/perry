@@ -6,82 +6,24 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/benlrice/perry/internal/vault"
 )
 
 const secret = "s3cr3t-Tok/en+value"
 
-func item(label string) Item {
-	return Item{Host: "h.example.com", Kind: "jira", Secret: secret, Username: "alice", Label: label}
+func entry(host, kind, sec string) vault.Entry {
+	return vault.Entry{Host: host, Kind: kind, Secret: sec, Username: "alice"}
 }
 
-func TestScrubLiteralAndEncodings(t *testing.T) {
-	r := New([]Item{item("h.example.com")})
-	mark := "«perry:h.example.com»"
-	cases := map[string]string{
-		"literal":     secret,
-		"std":         base64.StdEncoding.EncodeToString([]byte(secret)),
-		"url":         base64.URLEncoding.EncodeToString([]byte(secret)),
-		"rawstd":      base64.RawStdEncoding.EncodeToString([]byte(secret)),
-		"rawurl":      base64.RawURLEncoding.EncodeToString([]byte(secret)),
-		"query":       url.QueryEscape(secret),
-		"path":        url.PathEscape(secret),
-		"basic-auth":  base64.StdEncoding.EncodeToString([]byte("alice:" + secret)),
-		"echo|base64": base64.StdEncoding.EncodeToString([]byte(secret + "\n")),
-	}
-	for name, form := range cases {
-		got := r.Scrub("x " + form + " y")
-		if strings.Contains(got, form) {
-			t.Errorf("%s: form not scrubbed: %q", name, got)
-		}
-		if !strings.Contains(got, mark) {
-			t.Errorf("%s: no mark in %q", name, got)
-		}
-	}
-}
-
-func TestScrubEmbeddedBase64AtEveryAlignment(t *testing.T) {
-	r := New([]Item{item("h")})
-	for k := 0; k < 3; k++ {
-		in := strings.Repeat("Z", k) + secret + "tail!"
-		enc := base64.StdEncoding.EncodeToString([]byte(in))
-		if got := r.Scrub(enc); !strings.Contains(got, "«perry:h»") {
-			t.Errorf("alignment %d: not scrubbed: %q", k, got)
-		}
-	}
-}
-
-func TestUnreferencedLabelsAndShortSecrets(t *testing.T) {
-	r := New([]Item{
-		{Host: "long.example.com", Kind: "jira", Secret: "abcdefgh"},
-		{Host: "", Kind: "slack", Secret: "zzzzzzzz"},
-		{Host: "short.example.com", Kind: "jira", Secret: "cat"},
-	})
-	got := r.Scrub("abcdefgh zzzzzzzz cat")
-	want := "«perry:long.example.com» «perry:slack» cat"
-	if got != want {
-		t.Errorf("got %q want %q", got, want)
-	}
-}
-
-func TestReferencedShortSecretIsScrubbedLiteralOnly(t *testing.T) {
-	r := New([]Item{{Host: "h", Kind: "k", Secret: "cat", Label: "h"}})
-	if got := r.Scrub("a cat sat"); got != "a «perry:h» sat" {
-		t.Errorf("got %q", got)
-	}
-}
-
-func TestLongestPatternWins(t *testing.T) {
-	r := New([]Item{
-		{Host: "a", Kind: "k", Secret: "password1", Label: "a"},
-		{Host: "b", Kind: "k", Secret: "password12", Label: "b"},
-	})
-	if got := r.Scrub("password12"); got != "«perry:b»" {
-		t.Errorf("got %q", got)
-	}
+// refd returns a Set where the single entry is referenced under label.
+func refd(label, sec string) *Set {
+	e := entry("h.example.com", "jira", sec)
+	return New([]vault.Entry{e}, []vault.Ref{{Entry: e, Label: label}})
 }
 
 func TestWriterHoldsBackSplitSecret(t *testing.T) {
-	r := New([]Item{item("h")})
+	r := refd("h", secret)
 	var out bytes.Buffer
 	w := r.Writer(&out)
 	for i := 0; i < len(secret); i += 3 {
@@ -103,7 +45,7 @@ func TestWriterHoldsBackSplitSecret(t *testing.T) {
 }
 
 func TestWriterFlushesPartialPrefixAtEOF(t *testing.T) {
-	r := New([]Item{item("h")})
+	r := refd("h", secret)
 	var out bytes.Buffer
 	w := r.Writer(&out)
 	w.Write([]byte("hello s3cr"))
@@ -113,23 +55,77 @@ func TestWriterFlushesPartialPrefixAtEOF(t *testing.T) {
 	}
 }
 
-func TestContains(t *testing.T) {
-	if !Contains("curl "+secret, secret, "") {
-		t.Error("literal not detected")
+func TestScrubAndContainsAgree(t *testing.T) {
+	enc := func(e *base64.Encoding, in string) string { return e.EncodeToString([]byte(in)) }
+	mk := "«perry:h.example.com»"
+	unref := New([]vault.Entry{entry("h.example.com", "jira", secret)}, nil)
+	ref := refd("h.example.com", secret)
+	cases := []struct {
+		name string
+		set  *Set
+		text string
+		want string // scrubbed text; equal to text when nothing matches
+	}{
+		{"literal", ref, "x " + secret + " y", "x " + mk + " y"},
+		{"std", ref, enc(base64.StdEncoding, secret), mk},
+		{"url", ref, enc(base64.URLEncoding, secret), mk},
+		{"rawstd", ref, enc(base64.RawStdEncoding, secret), mk},
+		{"rawurl", ref, enc(base64.RawURLEncoding, secret), mk},
+		{"basic-auth", ref, enc(base64.StdEncoding, "alice:"+secret), mk},
+		{"query", ref, url.QueryEscape(secret), mk},
+		{"path", ref, url.PathEscape(secret), mk},
+		{"unreferenced long", unref, "x " + secret, "x " + mk},
+		{"unrelated", ref, "unrelated", "unrelated"},
+		{"short whole word referenced", refd("h", "cat"), "a cat sat", "a «perry:h» sat"},
+		{"short whole word unreferenced", New([]vault.Entry{entry("s.example.com", "web", "cat")}, nil), "a cat sat", "a «perry:s.example.com» sat"},
+		{"short inside a word", refd("h", "cat"), "category", "category"},
+		{"short after underscore", refd("h", "cat"), "snake_cat", "snake_cat"},
+		{"short at both ends", refd("h", "cat"), "cat", "«perry:h»"},
+		{"label falls back to kind", New([]vault.Entry{entry("", "slack", "zzzzzzzz")}, nil), "zzzzzzzz", "«perry:slack»"},
+		{"longest form wins", New([]vault.Entry{entry("a", "k", "password1"), entry("b", "k", "password12")}, nil), "password12", "«perry:b»"},
+		{"empty secret ignored", New([]vault.Entry{entry("h", "k", "")}, nil), "anything", "anything"},
 	}
-	if !Contains(base64.StdEncoding.EncodeToString([]byte(secret)), secret, "") {
-		t.Error("base64 not detected")
+	for _, c := range cases {
+		got := c.set.Scrub(c.text)
+		if got != c.want {
+			t.Errorf("%s: scrub got %q want %q", c.name, got, c.want)
+		}
+		if has := c.set.Contains(c.text); has != (got != c.text) {
+			t.Errorf("%s: Contains %v but scrub changed text: %v", c.name, has, got != c.text)
+		}
 	}
-	if Contains("unrelated", secret, "") {
-		t.Error("false positive")
+	for k := 0; k < 3; k++ {
+		text := enc(base64.StdEncoding, strings.Repeat("Z", k)+secret+"tail!")
+		if got := ref.Scrub(text); !strings.Contains(got, "«perry:h.example.com»") || !ref.Contains(text) {
+			t.Errorf("alignment %d: not scrubbed or detected: %q", k, got)
+		}
 	}
-	if Contains("category", "cat", "") {
-		t.Error("short secret matched inside a word")
+	if !ref.Contains("hello", "x "+secret) || ref.Contains() || New(nil, nil).Contains(secret) {
+		t.Error("multiple or empty texts")
 	}
-	if !Contains("the cat sat", "cat", "") {
-		t.Error("short secret whole word not detected")
+}
+
+func TestWriterShortSecret(t *testing.T) {
+	cases := []struct {
+		name   string
+		writes []string
+		want   string
+	}{
+		{"split across writes", []string{"a c", "at sat"}, "a «perry:h» sat"},
+		{"runs into a word character", []string{"a cat", "egory"}, "a category"},
+		{"boundary after a held match", []string{"a cat", " sat"}, "a «perry:h» sat"},
+		{"word before the chunk", []string{"s", "cat"}, "scat"},
+		{"match at EOF settled by flush", []string{"a cat"}, "a «perry:h»"},
 	}
-	if Contains("snake_cat", "cat", "") {
-		t.Error("underscore should count as word char")
+	for _, c := range cases {
+		var out bytes.Buffer
+		w := refd("h", "cat").Writer(&out)
+		for _, p := range c.writes {
+			w.Write([]byte(p))
+		}
+		w.Flush()
+		if out.String() != c.want {
+			t.Errorf("%s: got %q want %q", c.name, out.String(), c.want)
+		}
 	}
 }

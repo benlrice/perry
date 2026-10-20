@@ -31,14 +31,7 @@ type Result struct {
 
 // In reports whether any text holds a form of any secret in d.
 func In(d *vault.Data, texts ...string) bool {
-	for _, e := range d.Entries {
-		for _, t := range texts {
-			if redact.Contains(t, e.Secret, e.Username) {
-				return true
-			}
-		}
-	}
-	return false
+	return redact.New(d.Entries, nil).Contains(texts...)
 }
 
 // Check reads the store and runs In on it.

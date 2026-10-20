@@ -58,7 +58,7 @@ func cmdAdd(args []string) error {
 		return errors.New("empty secret")
 	}
 	if len(secret) < redact.MinLen {
-		fmt.Fprintf(stderr, "perry: add: warning: secret is shorter than %d characters; it matches only as a whole word and is not scrubbed unless a command references it\n", redact.MinLen)
+		fmt.Fprintf(stderr, "perry: add: warning: secret is shorter than %d characters; perry finds it only as a whole word and not in encoded forms\n", redact.MinLen)
 	}
 	if strings.Contains(strings.ToLower(*host), strings.ToLower(secret)) {
 		return errors.New("host contains the secret")
