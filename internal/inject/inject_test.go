@@ -97,6 +97,22 @@ func TestSplitWritesAreScrubbed(t *testing.T) {
 	}
 }
 
+func TestShortSecretsAreScrubbedAsWholeWords(t *testing.T) {
+	d := &vault.Data{Version: 1, Entries: []vault.Entry{
+		{Host: "cat.example.com", Kind: "web", Secret: "cat"},
+		{Host: "dog.example.com", Kind: "web", Secret: "dog"},
+	}}
+	p, err := Prepare(d, Request{ExpandArgv: true,
+		Argv: []string{"sh", "-c", `echo "a cat, a dog, category, dogma"`, "{{perry:dog.example.com}}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "a «perry:cat.example.com», a «perry:dog.example.com», category, dogma\n"
+	if out, _, _ := run(t, p); out != want {
+		t.Errorf("got %q want %q", out, want)
+	}
+}
+
 func TestSignalExitIs128Plus(t *testing.T) {
 	p, _ := Prepare(store(), Request{Argv: []string{"sh", "-c", "kill -TERM $$"}})
 	if _, _, code := run(t, p); code != 128+15 {

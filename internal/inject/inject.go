@@ -40,7 +40,7 @@ type Plan struct {
 	Env  []string
 	// Hint is a warning for stderr. It never holds a value.
 	Hint  string
-	scrub *redact.Redactor
+	scrub *redact.Set
 }
 
 // errSet collects error messages without repeats, in first-seen order.
@@ -96,7 +96,7 @@ func Prepare(d *vault.Data, req Request) (*Plan, error) {
 		}
 	}
 
-	p.scrub = redact.New(items(d, refs))
+	p.scrub = redact.New(d.Entries, refs)
 	if len(errs.msgs) > 0 {
 		return nil, errors.New(p.scrub.Scrub(strings.Join(errs.msgs, "; ")))
 	}
@@ -151,22 +151,4 @@ func emptyFieldError(r vault.Ref) error {
 		return fmt.Errorf("entry %s has no notes (set with: perry edit %s --notes TEXT)", e.Host, e.Host)
 	}
 	return fmt.Errorf("entry %s has an empty secret (replace with: perry add --host %s --kind %s --update)", e.Host, e.Host, e.Kind)
-}
-
-// items builds the redactor input: referenced entries under their ref label,
-// every other entry under its host.
-func items(d *vault.Data, refs []vault.Ref) []redact.Item {
-	var out []redact.Item
-	used := map[string]bool{}
-	for _, r := range refs {
-		e := r.Entry
-		out = append(out, redact.Item{Host: e.Host, Kind: e.Kind, Secret: e.Secret, Username: e.Username, Label: r.Label})
-		used[e.Host+"\x00"+e.Kind] = true
-	}
-	for _, e := range d.Entries {
-		if !used[e.Host+"\x00"+e.Kind] {
-			out = append(out, redact.Item{Host: e.Host, Kind: e.Kind, Secret: e.Secret, Username: e.Username})
-		}
-	}
-	return out
 }

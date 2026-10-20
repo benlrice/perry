@@ -8,22 +8,17 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/benlrice/perry/internal/vault"
 )
 
-// MinLen is the shortest secret (in bytes) that gets encoded forms and
-// unreferenced redaction.
+// MinLen is the shortest secret (in bytes) that gets encoded forms. A shorter
+// secret has only its literal form, and that form matches only as a whole word.
 const MinLen = 6
 
-// Item is one stored secret. Label is set when a command references the entry;
-// an empty Label means the entry is only scanned for.
-type Item struct {
-	Host, Kind, Secret, Username string
-	Label                        string
-}
-
-// Forms returns every form of the secret to look for, literal first, without
+// forms returns every form of the secret to look for, literal first, without
 // duplicates or empty strings.
-func Forms(secret, username string) []string {
+func forms(secret, username string) []string {
 	forms := []string{secret}
 	if len(secret) >= MinLen {
 		inputs := []string{secret}
@@ -86,34 +81,47 @@ func middles(in []byte) []string {
 
 type pattern struct {
 	text, label string
+	word        bool // matches only as a whole word
 }
 
-// Redactor replaces secret forms with «perry:LABEL» marks.
-type Redactor struct {
+// Set is the secret set built from the stored entries. It scrubs strings and
+// streams, and reports whether texts hold a form of any stored secret.
+type Set struct {
 	patterns []pattern
 }
 
-// New builds a Redactor. A referenced item is redacted under its Label. An
-// unreferenced item is redacted only when its secret is at least MinLen bytes,
-// under its host (or kind when the host is empty).
-func New(items []Item) *Redactor {
-	r := &Redactor{}
-	for _, it := range items {
-		label := it.Label
-		if label == "" {
-			if len(it.Secret) < MinLen {
-				continue
-			}
-			label = it.Host
-			if label == "" {
-				label = it.Kind
-			}
+// New builds a Set from the stored entries and the resolved refs (empty for
+// the Leak check). An entry a ref resolved to is redacted under the ref label.
+// Any other entry is redacted under its host (or kind when the host is empty).
+func New(entries []vault.Entry, refs []vault.Ref) *Set {
+	r := &Set{}
+	type key struct{ host, kind string }
+	labels := map[key]string{}
+	var all []vault.Entry
+	for _, ref := range refs {
+		e := ref.Entry
+		all = append(all, e)
+		labels[key{e.Host, e.Kind}] = ref.Label
+	}
+	for _, e := range entries {
+		if _, ok := labels[key{e.Host, e.Kind}]; !ok {
+			all = append(all, e)
 		}
-		if it.Secret == "" {
+	}
+	for _, e := range all {
+		if e.Secret == "" {
 			continue
 		}
-		for _, f := range Forms(it.Secret, it.Username) {
-			r.patterns = append(r.patterns, pattern{f, label})
+		label, ok := labels[key{e.Host, e.Kind}]
+		if !ok {
+			label = e.Host
+			if label == "" {
+				label = e.Kind
+			}
+		}
+		short := len(e.Secret) < MinLen
+		for _, f := range forms(e.Secret, e.Username) {
+			r.patterns = append(r.patterns, pattern{f, label, short})
 		}
 	}
 	sort.SliceStable(r.patterns, func(i, j int) bool {
@@ -124,15 +132,25 @@ func New(items []Item) *Redactor {
 
 func mark(label string) string { return "«perry:" + label + "»" }
 
-// replace scans s left to right. Unless final is set, it stops at the first
-// position whose rest could still grow into a pattern and returns the held
-// bytes as rest.
-func (r *Redactor) replace(s string, final bool) (out, rest string) {
+func isWord(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// replace scans s left to right; prevWord says whether the byte before s is a
+// word character. Unless final is set, it stops at the first position whose
+// rest could still grow into a pattern, or whose whole-word match still needs
+// the next byte, and returns the held bytes as rest. hit reports whether any
+// pattern matched.
+func (r *Set) replace(s string, prevWord, final bool) (out, rest string, hit bool) {
 	var b strings.Builder
 	i := 0
 scan:
 	for i < len(s) {
 		rem := s[i:]
+		before := prevWord
+		if i > 0 {
+			before = isWord(s[i-1])
+		}
 		if !final {
 			for _, p := range r.patterns {
 				if len(p.text) > len(rem) && strings.HasPrefix(p.text, rem) {
@@ -141,40 +159,59 @@ scan:
 			}
 		}
 		for _, p := range r.patterns {
-			if strings.HasPrefix(rem, p.text) {
-				b.WriteString(mark(p.label))
-				i += len(p.text)
-				continue scan
+			if !strings.HasPrefix(rem, p.text) {
+				continue
 			}
+			if p.word {
+				if before {
+					continue
+				}
+				if end := i + len(p.text); end < len(s) {
+					if isWord(s[end]) {
+						continue
+					}
+				} else if !final {
+					break scan
+				}
+			}
+			b.WriteString(mark(p.label))
+			i += len(p.text)
+			hit = true
+			continue scan
 		}
 		b.WriteByte(s[i])
 		i++
 	}
-	return b.String(), s[i:]
+	return b.String(), s[i:], hit
 }
 
 // Scrub replaces every secret form in s.
-func (r *Redactor) Scrub(s string) string {
-	out, _ := r.replace(s, true)
+func (r *Set) Scrub(s string) string {
+	out, _, _ := r.replace(s, false, true)
 	return out
 }
 
 // Writer is a streaming scrubber. Call Flush at EOF.
 type Writer struct {
 	mu   sync.Mutex
-	r    *Redactor
+	r    *Set
 	w    io.Writer
 	held string
+	prev bool // the last byte before held is a word character
 }
 
 // Writer returns a scrubbing writer on top of w.
-func (r *Redactor) Writer(w io.Writer) *Writer { return &Writer{r: r, w: w} }
+func (r *Set) Writer(w io.Writer) *Writer { return &Writer{r: r, w: w} }
 
 // Write reports len(p) written when the underlying write succeeds.
 func (w *Writer) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	out, rest := w.r.replace(w.held+string(p), false)
+	in := w.held + string(p)
+	out, rest, _ := w.r.replace(in, w.prev, false)
+	if n := len(in) - len(rest); n > 0 {
+		w.prev = isWord(in[n-1])
+	}
 	w.held = rest
 	if out != "" {
 		if _, err := io.WriteString(w.w, out); err != nil {
@@ -188,7 +225,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 func (w *Writer) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	out, _ := w.r.replace(w.held, true)
+	out, _, _ := w.r.replace(w.held, w.prev, true)
 	w.held = ""
 	if out == "" {
 		return nil
@@ -197,38 +234,13 @@ func (w *Writer) Flush() error {
 	return err
 }
 
-// Contains reports whether text holds any form of the secret. A secret shorter
-// than MinLen matches only as a whole word. It never returns the match.
-func Contains(text, secret, username string) bool {
-	if secret == "" {
-		return false
-	}
-	if len(secret) < MinLen {
-		return containsWord(text, secret)
-	}
-	for _, f := range Forms(secret, username) {
-		if strings.Contains(text, f) {
+// Contains reports whether any text holds a form of a stored secret: exactly
+// when Scrub would change it. It never returns the match.
+func (r *Set) Contains(texts ...string) bool {
+	for _, t := range texts {
+		if _, _, hit := r.replace(t, false, true); hit {
 			return true
 		}
 	}
 	return false
-}
-
-func isWord(c byte) bool {
-	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
-func containsWord(text, w string) bool {
-	for from := 0; ; {
-		i := strings.Index(text[from:], w)
-		if i < 0 {
-			return false
-		}
-		i += from
-		end := i + len(w)
-		if (i == 0 || !isWord(text[i-1])) && (end == len(text) || !isWord(text[end])) {
-			return true
-		}
-		from = i + 1
-	}
 }
